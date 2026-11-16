@@ -122,5 +122,27 @@ cargo build --release
 ./target/release/wall-street-champion --headless # terminal
 ```
 
-Runtime needs: a Vulkan driver (`libvulkan.so.1`; Mesa RADV/lavapipe on all
-three OSes) and X11/Wayland for windowed mode. `cargo test` needs nothing.
+Runtime needs: a Vulkan driver (`libvulkan.so.1`; Mesa RADV on AMD GPUs, or
+lavapipe/llvmpipe for software rendering — all packaged on Linux, FreeBSD and
+MidnightBSD) and X11/Wayland for windowed mode. `cargo test` needs nothing.
+The Vulkan loader is dlopen'ed at runtime (`ash` "loaded" feature), so the
+binary does not link against libvulkan at build time and builds identically on
+all three OSes. Ollama, when used for AI news, also runs on FreeBSD and
+MidnightBSD and can use Vulkan there (`ollama serve`, models via
+`ollama pull llama3.1`).
+
+## Verification (performed on this machine: AMD Radeon RX 9060 XT, RADV)
+
+- `cargo test` — 10 integration tests pass (determinism, 26-week termination,
+  margin rule, dividends, news/tips, win/bankrupt paths).
+- `--headless --bot` — full auto-played games across many seeds; ~50% of seeds
+  reach $1M with a simple sentiment strategy (good difficulty for a 10x goal).
+- `--gpu-headless --frames 24 --screenshot out.png` on the RX 9060 XT (RADV)
+  with FSR 1.x on (845x475 -> 1280x720 via EASU+RCAS) and off — PNGs verified
+  visually: top bar, portfolio, charts, newspaper/TV panels, tips, and the
+  scrolling ticker at the bottom all render correctly.
+- Same headless run on lavapipe (llvmpipe software Vulkan) initializes and
+  renders, so the game also works with no GPU at all.
+- `--llm` against a local Ollama server (llama3.1) — news bodies are written
+  by the local model; with no server running the game falls back to
+  procedural headlines (verified both paths).

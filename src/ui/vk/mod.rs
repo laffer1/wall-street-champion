@@ -1,6 +1,6 @@
 //! Vulkan UI (windowed via winit, or headless via VK_EXT_headless_surface).
-//! Implemented in renderer.rs / fsr.rs / shaders.rs / draw.rs / png.rs.
 
+pub mod app;
 pub mod draw;
 pub mod fsr;
 pub mod png;
@@ -20,9 +20,9 @@ pub struct VkOptions {
 }
 
 pub fn run_window(game: &mut Game, opts: &VkOptions) -> i32 {
-    renderer::run_window(game, opts)
+    app::run_window(game, opts)
 }
 
 pub fn run_headless_gpu(game: &mut Game, opts: &VkOptions) -> i32 {
-    renderer::run_headless_gpu(game, opts)
+    app::run_headless_gpu(game, opts)
 }

@@ -248,7 +248,7 @@ impl Market {
         // Random events: 1-3 per week.
         let n_events = 1 + rng.usize_below(3);
         for _ in 0..n_events {
-            let ev = self.roll_event(rng, target_week, &mut rets);
+            let ev = self.roll_event(rng, &mut rets);
             events.push(ev);
         }
 
@@ -263,7 +263,7 @@ impl Market {
         }
     }
 
-    fn roll_event(&self, rng: &mut Rng, week: u32, rets: &mut Vec<f64>) -> Event {
+    fn roll_event(&self, rng: &mut Rng, rets: &mut Vec<f64>) -> Event {
         let roll = rng.usize_below(100);
         if roll < 30 {
             // Macro event hitting the index / everything a bit.
@@ -348,7 +348,6 @@ impl Market {
             rets[i] += mag;
             Event { category: EventCategory::Crypto, symbol_idx: Some(i), impulse: mag, facts }
         }
-        .with_week(week)
     }
 
     /// Apply a rolled week: update prices, history, regime.
@@ -362,14 +361,5 @@ impl Market {
             st.history.push(st.price);
             st.pending_impulse *= 0.5;
         }
-    }
-}
-
-trait WithWeek {
-    fn with_week(self, _week: u32) -> Self;
-}
-impl WithWeek for Event {
-    fn with_week(self, _week: u32) -> Self {
-        self
     }
 }
