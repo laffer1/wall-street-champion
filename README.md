@@ -58,3 +58,9 @@ ollama serve &            # if not already running
 ```sh
 cargo test
 ```
+
+## License
+
+GPLv2 — see [LICENSE](LICENSE). Notes: the 8x8 bitmap font in `assets/` is
+public domain (font8x8 / IBM VGA font), and the FSR 1.x shader passes are
+ports of AMD's MIT-licensed FidelityFX-FSR reference implementation.

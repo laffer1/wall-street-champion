@@ -3,7 +3,7 @@ name = "wall-street-champion"
 version = "0.1.0"
 edition = "2021"
 description = "Stock trader game: turn $100k into $1M in 26 weeks. Vulkan + FSR 1.x."
-license = "MIT"
+license = "GPL-2.0-only"
 
 [dependencies]
 ash = "0.38"
