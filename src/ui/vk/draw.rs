@@ -12,6 +12,8 @@ use super::art;
 
 pub const FONT_W: f32 = 8.0;
 pub const FONT_H: f32 = 8.0;
+pub const LOGICAL_W: f32 = 1280.0;
+pub const LOGICAL_H: f32 = 720.0;
 
 // Rich vibrant palette
 pub const BG_TOP: [f32; 4] = [0.035, 0.050, 0.105, 1.0];
@@ -411,8 +413,10 @@ fn kind_badge_info(k: Kind) -> (&'static str, [f32; 4]) {
     }
 }
 
-/// Build the entire frame's geometry for resolution (w, h).
-pub fn build(game: &Game, ui: &UiState, w: f32, h: f32) -> Batch {
+/// Build the entire frame's geometry in the logical 1280x720 coordinate space
+/// (scaled by the GPU viewport to any window / fullscreen resolution).
+pub fn build(game: &Game, ui: &UiState, _w: f32, _h: f32) -> Batch {
+    let (w, h) = (LOGICAL_W, LOGICAL_H);
     let mut b = Batch::new();
     let prices = game.prices();
     let nw = game.net_worth_cents();

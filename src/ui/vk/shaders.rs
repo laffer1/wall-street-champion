@@ -78,21 +78,27 @@ fn fs(v: VOut) -> @location(0) vec4f {
 "#;
 
 /// Present pass: fullscreen triangle sampling the (possibly FSR-upscaled)
-/// image into the swapchain.
+/// image into the swapchain, scaling across the full window extent.
 pub const PRESENT_WGSL: &str = r#"
 @group(0) @binding(0) var src: texture_2d<f32>;
-struct VOut { @builtin(position) pos: vec4f };
+struct VOut {
+    @builtin(position) pos: vec4f,
+    @location(0) uv: vec2f,
+};
 @vertex
 fn vs(@builtin(vertex_index) vi: u32) -> VOut {
     var o: VOut;
-    let x = f32(i32(vi & 1u) << 2) - 1.0;
-    let y = f32(i32(vi & 2u) << 1) - 1.0;
-    o.pos = vec4f(x, y, 0.0, 1.0);
+    let u = f32((vi & 1u) << 1u);
+    let v = f32(vi & 2u);
+    o.pos = vec4f(u * 2.0 - 1.0, 1.0 - v * 2.0, 0.0, 1.0);
+    o.uv = vec2f(u, v);
     return o;
 }
 @fragment
 fn fs(v: VOut) -> @location(0) vec4f {
-    return textureLoad(src, vec2i(v.pos.xy), 0);
+    let d = vec2f(textureDimensions(src));
+    let p = clamp(vec2i(v.uv * d), vec2i(0, 0), vec2i(d) - vec2i(1, 1));
+    return textureLoad(src, p, 0);
 }
 "#;
 
