@@ -401,29 +401,8 @@ impl winit::application::ApplicationHandler for App {
             WindowEvent::Resized(size) => {
                 if let Some(core) = self.core.as_mut() {
                     if size.width > 0 && size.height > 0 {
-                        core.extent = vk::Extent2D { width: size.width, height: size.height };
-                        unsafe {
-                            core.swap_dev.destroy_swapchain(core.swapchain, None);
-                        }
-                        let caps = unsafe { core.surf_ext.get_physical_device_surface_capabilities(core.phys, core.surface) }.unwrap();
-                        let image_count = (caps.min_image_count + 1).min(if caps.max_image_count == 0 { caps.min_image_count + 1 } else { caps.max_image_count });
-                        let sc_ci = vk::SwapchainCreateInfoKHR::default()
-                            .surface(core.surface)
-                            .min_image_count(image_count)
-                            .image_format(core.sc_format)
-                            .image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
-                            .image_extent(core.extent)
-                            .image_array_layers(1)
-                            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC)
-                            .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-                            .pre_transform(caps.current_transform)
-                            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-                            .present_mode(vk::PresentModeKHR::FIFO)
-                            .clipped(true);
-                        core.swapchain = unsafe { core.swap_dev.create_swapchain(&sc_ci, None) }.unwrap();
-                        let _ = core.recreate_swapchain_images();
                         let scale = if self.ui.fsr { self.opts.fsr_scale } else { 1.0 };
-                        let _ = core.set_render_scale(scale);
+                        let _ = core.resize(size.width, size.height, scale);
                     }
                 }
             }
@@ -438,11 +417,24 @@ impl winit::application::ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 if let (Some(core), Some(game)) = (self.core.as_mut(), self.game.as_ref()) {
+                    if let Some(w) = &self.window {
+                        let sz = w.inner_size();
+                        if sz.width > 0 && sz.height > 0 && (sz.width != core.extent.width || sz.height != core.extent.height) {
+                            let scale = if self.ui.fsr { self.opts.fsr_scale } else { 1.0 };
+                            let _ = core.resize(sz.width, sz.height, scale);
+                        }
+                    }
                     self.ui.frame += 1;
                     let batch = draw::build(game, &self.ui, core.extent.width as f32, core.extent.height as f32);
                     match core.render(&batch, self.ui.fsr, false) {
                         Ok(()) => {}
-                        Err(e) if e == "out_of_date" => {}
+                        Err(e) if e == "out_of_date" => {
+                            if let Some(w) = &self.window {
+                                let sz = w.inner_size();
+                                let scale = if self.ui.fsr { self.opts.fsr_scale } else { 1.0 };
+                                let _ = core.resize(sz.width, sz.height, scale);
+                            }
+                        }
                         Err(e) => eprintln!("render: {}", e),
                     }
                 }

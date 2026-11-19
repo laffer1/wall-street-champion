@@ -635,7 +635,52 @@ impl Core {
         Ok(())
     }
 
-    /// Recreate the low-res offscreen (render scale change / FSR toggle).
+    /// Recreate the swapchain and all size-dependent offscreen targets on window resize/maximize.
+    pub fn resize(&mut self, width: u32, height: u32, scale: f32) -> Result<(), String> {
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+        unsafe {
+            self.device.device_wait_idle().map_err(|e| format!("idle: {:?}", e))?;
+            let caps = self
+                .surf_ext
+                .get_physical_device_surface_capabilities(self.phys, self.surface)
+                .map_err(|e| format!("caps: {:?}", e))?;
+            self.extent = if caps.current_extent.width != u32::MAX && caps.current_extent.width > 0 {
+                caps.current_extent
+            } else {
+                vk::Extent2D {
+                    width: width.clamp(caps.min_image_extent.width.max(1), caps.max_image_extent.width.max(width)),
+                    height: height.clamp(caps.min_image_extent.height.max(1), caps.max_image_extent.height.max(height)),
+                }
+            };
+            self.swap_dev.destroy_swapchain(self.swapchain, None);
+            let image_count = (caps.min_image_count + 1).min(if caps.max_image_count == 0 {
+                caps.min_image_count + 1
+            } else {
+                caps.max_image_count
+            });
+            let sc_ci = vk::SwapchainCreateInfoKHR::default()
+                .surface(self.surface)
+                .min_image_count(image_count)
+                .image_format(self.sc_format)
+                .image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
+                .image_extent(self.extent)
+                .image_array_layers(1)
+                .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC)
+                .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+                .pre_transform(caps.current_transform)
+                .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+                .present_mode(vk::PresentModeKHR::FIFO)
+                .clipped(true);
+            self.swapchain = self.swap_dev.create_swapchain(&sc_ci, None).map_err(|e| format!("swapchain: {:?}", e))?;
+        }
+        self.recreate_swapchain_images()?;
+        self.set_render_scale(scale)?;
+        Ok(())
+    }
+
+    /// Recreate the low-res and high-res offscreen targets (render scale change / FSR toggle / window resize).
     pub fn set_render_scale(&mut self, scale: f32) -> Result<(), String> {
         self.render_scale = scale;
         self.lw = ((self.extent.width as f32 * scale).round() as u32).max(8);
@@ -646,46 +691,83 @@ impl Core {
             self.device.destroy_image_view(self.lowres_view, None);
             self.device.destroy_image(self.lowres, None);
             self.device.free_memory(self.lowres_mem, None);
+            self.device.destroy_image_view(self.hires_a_view, None);
+            self.device.destroy_image(self.hires_a, None);
+            self.device.free_memory(self.hires_a_mem, None);
+            self.device.destroy_image_view(self.hires_b_view, None);
+            self.device.destroy_image(self.hires_b, None);
+            self.device.free_memory(self.hires_b_mem, None);
+            self.device.unmap_memory(self.shot_mem);
+            self.device.destroy_buffer(self.shot_buf, None);
+            self.device.free_memory(self.shot_mem, None);
+
             let mem_props = self.instance.get_physical_device_memory_properties(self.phys);
-            let img = self.device.create_image(
-                &vk::ImageCreateInfo::default()
-                    .image_type(vk::ImageType::TYPE_2D)
-                    .format(self.off_format)
-                    .extent(vk::Extent3D { width: self.lw, height: self.lh, depth: 1 })
-                    .mip_levels(1)
-                    .array_layers(1)
-                    .samples(vk::SampleCountFlags::TYPE_1)
-                    .tiling(vk::ImageTiling::OPTIMAL)
-                    .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
-                    .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                    .initial_layout(vk::ImageLayout::UNDEFINED),
-                None,
-            ).map_err(|e| format!("lowres: {:?}", e))?;
-            let req = self.device.get_image_memory_requirements(img);
-            let ti = mem_type(&mem_props, req.memory_type_bits, vk::MemoryPropertyFlags::DEVICE_LOCAL).ok_or("no mem type")?;
-            let mem = self.device.allocate_memory(&vk::MemoryAllocateInfo::default().allocation_size(req.size).memory_type_index(ti), None).map_err(|e| format!("mem: {:?}", e))?;
-            self.device.bind_image_memory(img, mem, 0).map_err(|e| format!("bind: {:?}", e))?;
-            let view = self.device.create_image_view(
-                &vk::ImageViewCreateInfo::default()
-                    .image(img)
-                    .view_type(vk::ImageViewType::TYPE_2D)
-                    .format(self.off_format)
-                    .subresource_range(vk::ImageSubresourceRange::default().aspect_mask(vk::ImageAspectFlags::COLOR).level_count(1).layer_count(1)),
-                None,
-            ).map_err(|e| format!("view: {:?}", e))?;
+            let mk_img_view = |w: u32, h: u32, usage: vk::ImageUsageFlags| -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView), String> {
+                let img = self.device.create_image(
+                    &vk::ImageCreateInfo::default()
+                        .image_type(vk::ImageType::TYPE_2D)
+                        .format(self.off_format)
+                        .extent(vk::Extent3D { width: w, height: h, depth: 1 })
+                        .mip_levels(1)
+                        .array_layers(1)
+                        .samples(vk::SampleCountFlags::TYPE_1)
+                        .tiling(vk::ImageTiling::OPTIMAL)
+                        .usage(usage)
+                        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                        .initial_layout(vk::ImageLayout::UNDEFINED),
+                    None,
+                ).map_err(|e| format!("img: {:?}", e))?;
+                let req = self.device.get_image_memory_requirements(img);
+                let ti = mem_type(&mem_props, req.memory_type_bits, vk::MemoryPropertyFlags::DEVICE_LOCAL).ok_or("no mem type")?;
+                let mem = self.device.allocate_memory(&vk::MemoryAllocateInfo::default().allocation_size(req.size).memory_type_index(ti), None).map_err(|e| format!("mem: {:?}", e))?;
+                self.device.bind_image_memory(img, mem, 0).map_err(|e| format!("bind: {:?}", e))?;
+                let view = self.device.create_image_view(
+                    &vk::ImageViewCreateInfo::default()
+                        .image(img)
+                        .view_type(vk::ImageViewType::TYPE_2D)
+                        .format(self.off_format)
+                        .subresource_range(vk::ImageSubresourceRange::default().aspect_mask(vk::ImageAspectFlags::COLOR).level_count(1).layer_count(1)),
+                    None,
+                ).map_err(|e| format!("view: {:?}", e))?;
+                Ok((img, mem, view))
+            };
+
+            let (lowres, lowres_mem, lowres_view) = mk_img_view(self.lw, self.lh, vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)?;
+            let (hires_a, hires_a_mem, hires_a_view) = mk_img_view(self.extent.width, self.extent.height, vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE)?;
+            let (hires_b, hires_b_mem, hires_b_view) = mk_img_view(self.extent.width, self.extent.height, vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE)?;
+
             self.scene_fb = self.device.create_framebuffer(
                 &vk::FramebufferCreateInfo::default()
                     .render_pass(self.rp_scene)
-                    .attachments(std::slice::from_ref(&view))
+                    .attachments(std::slice::from_ref(&lowres_view))
                     .width(self.lw)
                     .height(self.lh)
                     .layers(1),
                 None,
             ).map_err(|e| format!("fb: {:?}", e))?;
-            self.lowres = img;
-            self.lowres_mem = mem;
-            self.lowres_view = view;
+
+            let shot_size = (self.extent.width as u64 * self.extent.height as u64 * 4).max(4);
+            let sbuf = self.device.create_buffer(&vk::BufferCreateInfo::default().size(shot_size).usage(vk::BufferUsageFlags::TRANSFER_DST), None).map_err(|e| format!("sbuf: {:?}", e))?;
+            let sreq = self.device.get_buffer_memory_requirements(sbuf);
+            let sti = mem_type(&mem_props, sreq.memory_type_bits, vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT).ok_or("no host mem")?;
+            let smem = self.device.allocate_memory(&vk::MemoryAllocateInfo::default().allocation_size(sreq.size).memory_type_index(sti), None).map_err(|e| format!("smem: {:?}", e))?;
+            self.device.bind_buffer_memory(sbuf, smem, 0).map_err(|e| format!("sbind: {:?}", e))?;
+            let sptr = self.device.map_memory(smem, 0, shot_size, vk::MemoryMapFlags::empty()).map_err(|e| format!("smap: {:?}", e))? as *mut u8;
+
+            self.lowres = lowres;
+            self.lowres_mem = lowres_mem;
+            self.lowres_view = lowres_view;
+            self.hires_a = hires_a;
+            self.hires_a_mem = hires_a_mem;
+            self.hires_a_view = hires_a_view;
+            self.hires_b = hires_b;
+            self.hires_b_mem = hires_b_mem;
+            self.hires_b_view = hires_b_view;
+            self.shot_buf = sbuf;
+            self.shot_mem = smem;
+            self.shot_ptr = sptr;
         }
+        self.one_time_layouts()?;
         self.transition_lowres_to_read()?;
         self.write_descriptors()?;
         Ok(())
@@ -693,6 +775,8 @@ impl Core {
 
     fn submit_one_shot(&self, record: impl FnOnce()) -> Result<(), String> {
         unsafe {
+            self.device.wait_for_fences(&[self.fence], true, u64::MAX).map_err(|e| format!("wait: {:?}", e))?;
+            self.device.reset_fences(&[self.fence]).map_err(|e| format!("reset fence: {:?}", e))?;
             self.device.reset_command_buffer(self.cmdbuf, vk::CommandBufferResetFlags::empty()).map_err(|e| format!("reset: {:?}", e))?;
             self.device.begin_command_buffer(self.cmdbuf, &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)).map_err(|e| format!("begin: {:?}", e))?;
             record();
@@ -868,7 +952,7 @@ impl Core {
         }
         unsafe {
             std::ptr::copy_nonoverlapping(batch.v.as_ptr() as *const u8, self.vbuf_ptr, bytes);
-            let scene_u = [self.extent.width as f32, self.extent.height as f32, 0.0f32, 0.0];
+            let scene_u = [draw::LOGICAL_W, draw::LOGICAL_H, 0.0f32, 0.0];
             std::ptr::copy_nonoverlapping(scene_u.as_ptr() as *const u8, self.ubo_scene_ptr, 16);
         }
         self.write_easu_consts();
@@ -984,7 +1068,10 @@ impl Core {
                 .wait_semaphores(std::slice::from_ref(&self.sem_done))
                 .swapchains(std::slice::from_ref(&self.swapchain))
                 .image_indices(std::slice::from_ref(&idx));
-            let _ = self.swap_dev.queue_present(self.queue, &pi);
+            match self.swap_dev.queue_present(self.queue, &pi) {
+                Ok(true) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => return Err("out_of_date".to_string()),
+                _ => {}
+            }
             // Do not wait here: the next render() call waits on the fence before
             // re-recording. The fence stays signaled after completion.
         }
