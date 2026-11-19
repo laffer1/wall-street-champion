@@ -51,6 +51,32 @@ fn run_headless_inner(game: &mut Game, opts: &VkOptions) -> Result<i32, String> 
     ui.llm_on = game.llm.is_some();
     let shot_frame = opts.frames.saturating_sub(1);
     for frame in 0..opts.frames {
+        if frame == 1 && game.status == Status::Playing {
+            let prices = game.prices();
+            for &(sym_idx, dollars) in &[(0usize, 28_000.0), (12, 18_000.0), (17, 14_000.0)] {
+                if sym_idx < prices.len() {
+                    game.portfolio.queue(Order {
+                        symbol_idx: sym_idx,
+                        side: Side::Buy,
+                        shares: dollars / prices[sym_idx],
+                    });
+                }
+            }
+            game.toggle_trust(0);
+        }
+        if frame == 16 && game.status == Status::Playing {
+            let prices = game.prices();
+            game.portfolio.queue(Order {
+                symbol_idx: 1,
+                side: Side::Buy,
+                shares: 5_000.0 / prices[1],
+            });
+        }
+        ui.news_source = match (frame / 10) % 3 {
+            0 => Source::Newspaper,
+            1 => Source::Tv,
+            _ => Source::Wire,
+        };
         if frame % 8 == 7 && game.status == Status::Playing {
             match game.end_week() {
                 Ok(r) => {
@@ -202,12 +228,32 @@ impl App {
                     self.ui.msg = format!("you hold no {}", game.market.defs[sel].symbol);
                 }
             }
+            KeyC => {
+                game.portfolio.queued.clear();
+                self.ui.msg = "cleared all queued orders".to_string();
+            }
             KeyN => {
                 self.ui.news_source = match self.ui.news_source {
                     Source::Newspaper => Source::Tv,
                     Source::Tv => Source::Wire,
                     Source::Wire => Source::Newspaper,
                 };
+            }
+            KeyV => {
+                self.ui.news_source = if self.ui.news_source == Source::Tv {
+                    Source::Newspaper
+                } else {
+                    Source::Tv
+                };
+            }
+            KeyW => {
+                self.ui.news_source = Source::Wire;
+            }
+            ArrowUp | ArrowLeft => {
+                self.ui.selected = (sel + n - 1) % n;
+            }
+            ArrowDown | ArrowRight => {
+                self.ui.selected = (sel + 1) % n;
             }
             KeyF => {
                 self.ui.fsr = !self.ui.fsr;

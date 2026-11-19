@@ -4,23 +4,32 @@
 use std::io::{self, BufRead, Write};
 use crate::llm::Llm;
 use crate::sim::game::{Game, Status, TOTAL_WEEKS};
+use crate::sim::market::Regime;
 use crate::sim::news::Source;
 use crate::sim::portfolio::{fmt_money, fmt_price, Order, Side};
+
+const RST: &str = "\x1b[0m";
+const BOLD: &str = "\x1b[1m";
+const DIM: &str = "\x1b[2m";
+const RED: &str = "\x1b[91m";
+const GRN: &str = "\x1b[92m";
+const YEL: &str = "\x1b[93m";
+const BLU: &str = "\x1b[94m";
+const MAG: &str = "\x1b[95m";
+const CYN: &str = "\x1b[96m";
 
 pub fn run(seed: u64, llm: Option<Llm>, bot: bool) -> i32 {
     let mut game = Game::new(seed, llm);
     if bot {
         return bot_play(&mut game);
     }
-    println!("======================================================================");
-    println!("  WALL STREET CHAMPION");
-    println!("  You inherited $100,000. Turn it into $1,000,000 in {} weeks.", TOTAL_WEEKS);
-    println!("  Living expenses: $1,500/week. No other income. Trade once a week.");
-    println!("  Type 'help' for commands.");
-    println!("======================================================================");
+    println!("{CYN}╔══════════════════════════════════════════════════════════════════════════╗{RST}");
+    println!("{CYN}║{RST}  🐂 {BOLD}{YEL}WALL STREET CHAMPION{RST} 🐻   {CYN}—  $100,000 TO $1,000,000 IN {TOTAL_WEEKS} WEEKS{RST}      {CYN}║{RST}");
+    println!("{CYN}║{RST}  {DIM}Living expenses: $1,500/wk • Margin: 2x (0.5%/wk) • Type 'help'{RST}         {CYN}║{RST}");
+    println!("{CYN}╚══════════════════════════════════════════════════════════════════════════╝{RST}");
     loop {
         print_screen(&game);
-        print!("> ");
+        print!("{BOLD}{YEL}wsc>{RST} ");
         io::stdout().flush().ok();
         let mut line = String::new();
         if io::stdin().lock().read_line(&mut line).unwrap_or(0) == 0 {
@@ -75,36 +84,53 @@ fn print_end(game: &Game, won: bool, msg: &str) {
 
 fn print_screen(g: &Game) {
     let prices = g.prices();
-    println!("\n--- WEEK {}/{} ------------------------------------------------", g.week.min(TOTAL_WEEKS), TOTAL_WEEKS);
+    let nw = g.net_worth_cents();
+    let pct = 100.0 * nw as f64 / 1_000_000_00.0;
+    let reg = match g.market.regime {
+        Regime::Bull => format!("{GRN}▲ BULL{RST}"),
+        Regime::Bear => format!("{RED}▼ BEAR{RST}"),
+        Regime::Sideways => format!("{YEL}◆ SIDEWAYS{RST}"),
+    };
+    let nw_col = if nw >= 100_000_00 { GRN } else { RED };
+    let bar_n = ((pct / 5.0).round() as usize).clamp(0, 20);
+    let bar = format!("{GRN}{}{DIM}{}{RST}", "█".repeat(bar_n), "░".repeat(20 - bar_n));
     println!(
-        "Cash {:<14} Debt {:<12} Net worth {:<14} Goal $1,000,000 ({:.1}%)",
+        "\n{BLU}┏━━ {BOLD}{YEL}WEEK {:>2}/{}{RST} {BLU}━━━{RST} Regime: {} {BLU}━━━{RST} Goal [{}] {BOLD}{:.1}%{RST}",
+        g.week.min(TOTAL_WEEKS),
+        TOTAL_WEEKS,
+        reg,
+        bar,
+        pct
+    );
+    println!(
+        "{BLU}┃{RST} Cash {CYN}{:<14}{RST} Debt {YEL}{:<12}{RST} Net Worth {BOLD}{nw_col}{:<14}{RST}",
         fmt_money(g.portfolio.cash_cents),
         fmt_money(g.portfolio.debt_cents()),
-        fmt_money(g.net_worth_cents()),
-        100.0 * g.net_worth_cents() as f64 / 1_000_000_00.0
+        fmt_money(nw),
     );
     if !g.portfolio.queued.is_empty() {
-        println!("Queued orders:");
+        println!("{BLU}┃{RST} {YEL}Queued orders:{RST}");
         for o in &g.portfolio.queued {
+            let scol = match o.side { Side::Buy => GRN, Side::Sell => RED };
             println!(
-                "  {:?} {} {:.4} shares @ {}",
+                "{BLU}┃{RST}   {scol}{:?}{RST} {BOLD}{}{RST} {:.4} shares @ {}",
                 o.side, g.market.defs[o.symbol_idx].symbol, o.shares, fmt_price(prices[o.symbol_idx])
             );
         }
     }
-    println!("Holdings: {}", holdings_line(g));
+    println!("{BLU}┗━━{RST} Holdings: {}", holdings_line(g));
     print_tips(g);
 }
 
 fn holdings_line(g: &Game) -> String {
     let prices = g.prices();
     if g.portfolio.holdings.is_empty() {
-        return "(none)".to_string();
+        return format!("{DIM}(none — 100% cash){RST}");
     }
     let mut v: Vec<_> = g.portfolio.holdings.iter().collect();
     v.sort_by_key(|&(i, _)| *i);
     v.iter()
-        .map(|(&i, &sh)| format!("{} x{:.2} ({})", g.market.defs[i].symbol, sh, fmt_money((sh * prices[i] * 100.0) as i64)))
+        .map(|(&i, &sh)| format!("{BOLD}{CYN}{}{RST} x{:.2} ({GRN}{}{RST})", g.market.defs[i].symbol, sh, fmt_money((sh * prices[i] * 100.0) as i64)))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -113,27 +139,28 @@ fn print_tips(g: &Game) {
     if g.tips.is_empty() {
         return;
     }
-    println!("Tips this week (follow N / trust person P):");
+    println!("{MAG}💬 Street Contacts & Tips{RST} {DIM}(follow N / trust P):{RST}");
     for (i, t) in g.tips.iter().enumerate() {
         let p = &g.people[t.person];
         let outcome = match t.was_correct {
-            Some(true) => " [was RIGHT]",
-            Some(false) => " [was WRONG]",
-            None => "",
+            Some(true) => format!(" {GRN}[RIGHT]{RST}"),
+            Some(false) => format!(" {RED}[WRONG]{RST}"),
+            None => String::new(),
         };
+        let dir = if t.up { format!("{GRN}▲ UP{RST}") } else { format!("{RED}▼ DOWN{RST}") };
+        let tr = if p.trusted { format!(", {YEL}★TRUSTED{RST}") } else { String::new() };
         println!(
-            "  [{}] {} ({}{}): \"{}\"{}  -> {} {}",
-            i + 1, p.name, p.archetype, if p.trusted { ", TRUSTED" } else { "" },
-            t.text, outcome, g.market.defs[t.symbol_idx].symbol,
-            if t.up { "UP" } else { "DOWN" }
+            "  {YEL}[{}]{RST} {BOLD}{}{RST} ({DIM}{}{RST}{}): \"{}\"{}  -> {BOLD}{}{RST} {}",
+            i + 1, p.name, p.archetype, tr,
+            t.text, outcome, g.market.defs[t.symbol_idx].symbol, dir
         );
     }
 }
 
 fn print_market(g: &Game) {
     let prices = g.prices();
-    println!("\nMARKET (week {}) — regime: {:?}", g.week, g.market.regime);
-    println!("{:<6} {:<28} {:<12} {:>10} {:>9} {:>8}  hist", "SYM", "NAME", "KIND", "PRICE", "WK CHG", "WK RET");
+    println!("\n{CYN}══ MARKET WATCHLIST (week {}) — regime: {:?} ══{RST}", g.week, g.market.regime);
+    println!("{BOLD}{:<6} {:<28} {:<12} {:>10} {:>9}  hist{RST}", "SYM", "NAME", "KIND", "PRICE", "WK CHG");
     for (i, d) in g.market.defs.iter().enumerate() {
         let st = &g.market.states[i];
         let wk = if st.history.len() >= 2 {
@@ -141,27 +168,34 @@ fn print_market(g: &Game) {
         } else {
             0.0
         };
-        let sel = if g.portfolio.shares_of(i) > 0.0 { "*" } else { "" };
+        let sel = if g.portfolio.shares_of(i) > 0.0 { format!("{YEL}★{RST}") } else { String::new() };
+        let ccol = if wk >= 0.0 { GRN } else { RED };
         println!(
-            "{:<6} {:<28} {:<12} {:>10} {:>+8.2}% {:>+8.2}%  {} {}",
+            "{BOLD}{:<6}{RST} {:<28} {DIM}{:<12}{RST} {:>10} {ccol}{:>+8.2}%  {}{RST} {}",
             d.symbol, truncate(&d.name, 28), d.kind.label(), fmt_price(prices[i]), wk * 100.0,
-            g.pending.rets[i].abs() * 0.0 + wk * 100.0, spark(&st.history), sel
+            spark(&st.history), sel
         );
     }
-    println!("(* = you hold it. XGL index level: {:.2})", g.market.index);
+    println!("{DIM}(★ = you hold it. XGL index level: {:.2}){RST}", g.market.index);
 }
 
 fn print_news(g: &Game, source: Source) {
-    println!("\n===== {} — week {} =====", source.label(), g.week);
+    println!("\n{YEL}═════ 📰 {} — week {} ═════{RST}", source.label(), g.week);
     let items = g.news_by(source);
     if items.is_empty() {
-        println!("(no stories)");
+        println!("{DIM}(no stories){RST}");
     }
     for n in items.iter().take(14) {
         let sym = n.symbol.map(|i| g.market.defs[i].symbol).unwrap_or("MKT");
-        let arrow = if n.sentiment > 0.25 { "^" } else if n.sentiment < -0.25 { "v" } else { "-" };
-        println!("[{:>4}] {} {} {}", sym, arrow, n.headline, "");
-        println!("        {}", truncate(&n.body, 110));
+        let (arrow, col) = if n.sentiment > 0.25 {
+            ("▲", GRN)
+        } else if n.sentiment < -0.25 {
+            ("▼", RED)
+        } else {
+            ("•", CYN)
+        };
+        println!("{col}[{:>4}] {}{RST} {BOLD}{}{RST}", sym, arrow, n.headline);
+        println!("        {DIM}{}{RST}", truncate(&n.body, 110));
     }
 }
 
