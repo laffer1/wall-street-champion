@@ -868,7 +868,7 @@ impl Core {
         }
         unsafe {
             std::ptr::copy_nonoverlapping(batch.v.as_ptr() as *const u8, self.vbuf_ptr, bytes);
-            let scene_u = [self.lw as f32, self.lh as f32, 0.0f32, 0.0];
+            let scene_u = [self.extent.width as f32, self.extent.height as f32, 0.0f32, 0.0];
             std::ptr::copy_nonoverlapping(scene_u.as_ptr() as *const u8, self.ubo_scene_ptr, 16);
         }
         self.write_easu_consts();

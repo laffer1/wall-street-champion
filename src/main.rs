@@ -27,7 +27,7 @@ fn real_main() -> i32 {
     let mut width = 1280u32;
     let mut height = 720u32;
     let mut fsr = true;
-    let mut fsr_scale = 0.66f32;
+    let mut fsr_scale = 1.0f32;
 
     let mut i = 0;
     while i < args.len() {

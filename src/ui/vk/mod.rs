@@ -1,6 +1,7 @@
 //! Vulkan UI (windowed via winit, or headless via VK_EXT_headless_surface).
 
 pub mod app;
+pub mod art;
 pub mod draw;
 pub mod fsr;
 pub mod png;

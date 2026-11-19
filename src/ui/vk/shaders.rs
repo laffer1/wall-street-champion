@@ -6,7 +6,7 @@
 //! upsampling (12-tap Lanczos-style kernel), RCAS = robust contrast-adaptive
 //! sharpening (5-tap with min/max clamp + noise detection).
 
-/// Scene pass: colored quads + bitmap-font text into the low-res offscreen.
+/// Scene pass: colored quads, procedural shapes, and bitmap-font text into the low-res offscreen.
 pub const SCENE_WGSL: &str = r#"
 struct U { res: vec2f, pad: vec2f };
 @group(0) @binding(0) var<uniform> u: U;
@@ -15,8 +15,8 @@ struct U { res: vec2f, pad: vec2f };
 struct VIn {
     @location(0) pos: vec2f,   // pixel coords, y down
     @location(1) col: vec4f,
-    @location(2) uv: vec2f,    // font atlas pixel coords
-    @location(3) mode: f32,    // 0 = solid color, 1 = font glyph
+    @location(2) uv: vec2f,    // font atlas pixel coords or local shape coords
+    @location(3) mode: f32,    // 0=solid/grad, 1=font, 2=circle, 3=glow, 4=pill, 5=scanline
 };
 struct VOut {
     @builtin(position) pos: vec4f,
@@ -36,8 +36,44 @@ fn vs(v: VIn) -> VOut {
 @fragment
 fn fs(v: VOut) -> @location(0) vec4f {
     if (v.mode < 0.5) { return v.col; }
-    let a = textureLoad(font, vec2i(v.uv), 0).r;
-    return vec4f(v.col.rgb, v.col.a * a);
+    if (v.mode < 1.5) {
+        // Sharpened sub-texel font sampling so 8x8 glyphs stay crisp under FSR 1.x
+        let tile_min = floor(v.uv / 8.0) * 8.0;
+        let tile_max = tile_min + vec2f(7.0, 7.0);
+        let p = v.uv - vec2f(0.5, 0.5);
+        let i0 = clamp(vec2i(floor(p)), vec2i(tile_min), vec2i(tile_max));
+        let i1 = clamp(i0 + vec2i(1, 1), vec2i(tile_min), vec2i(tile_max));
+        let f = smoothstep(vec2f(0.22, 0.22), vec2f(0.78, 0.78), fract(p));
+        let s00 = textureLoad(font, vec2i(i0.x, i0.y), 0).r;
+        let s10 = textureLoad(font, vec2i(i1.x, i0.y), 0).r;
+        let s01 = textureLoad(font, vec2i(i0.x, i1.y), 0).r;
+        let s11 = textureLoad(font, vec2i(i1.x, i1.y), 0).r;
+        let b = mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+        let a = smoothstep(0.25, 0.55, b);
+        return vec4f(v.col.rgb, v.col.a * a);
+    }
+    if (v.mode < 2.5) {
+        // Anti-aliased circle/disc (uv in -1..1)
+        let d = length(v.uv);
+        let a = 1.0 - smoothstep(0.84, 1.0, d);
+        return vec4f(v.col.rgb, v.col.a * a);
+    }
+    if (v.mode < 3.5) {
+        // Soft radial glow (uv in -1..1)
+        let d = clamp(length(v.uv), 0.0, 1.0);
+        let a = (1.0 - d) * (1.0 - d);
+        return vec4f(v.col.rgb, v.col.a * a);
+    }
+    if (v.mode < 4.5) {
+        // Rounded badge / pill (uv in -1..1)
+        let q = abs(v.uv) - vec2f(0.72, 0.58);
+        let d = length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - 0.28;
+        let a = 1.0 - smoothstep(-0.06, 0.06, d);
+        return vec4f(v.col.rgb, v.col.a * a);
+    }
+    // Scanline / CRT overlay
+    let scan = 0.55 + 0.45 * sin(v.uv.y * 3.14159265);
+    return vec4f(v.col.rgb, v.col.a * scan);
 }
 "#;
 
